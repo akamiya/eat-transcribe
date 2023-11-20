@@ -1,14 +1,15 @@
+""" main application file """
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 from pathlib import Path
 from threading import Lock
 from collections import defaultdict
 import shutil
-import argparse
 import uuid
 import zlib
+import os
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, jsonify, request, send_file
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import BadRequest, Forbidden, NotFound
 
@@ -17,24 +18,26 @@ app = Flask(__name__)
 storage_path: Path = Path(__file__).parent / "storage"
 chunk_path: Path = Path(__file__).parent / "chunk"
 
-allow_downloads = False
-dropzone_cdn = "https://cdnjs.cloudflare.com/ajax/libs/dropzone"
-dropzone_version = "5.7.6"
-dropzone_timeout = "120000"
-dropzone_max_file_size = "100000"
-dropzone_chunk_size = "1000000"
-dropzone_parallel_chunks = "true"
-dropzone_force_chunking = "true"
+ALLOW_DOWNLOADS = False
+DROPZONE_CDN = "https://cdnjs.cloudflare.com/ajax/libs/dropzone"
+DROPZONE_VERSION = "5.7.6"
+DROPZONE_TIMEOUT = "1200000"
+DROPZONE_MAX_FILE_SIZE = "100000"
+DROPZONE_CHUNK_SIZE = "1000000"
+DROPZONE_PARALLEL_CHUNKS = "true"
+DROPZONE_FORCE_CHUNKING = "true"
 
 lock = Lock()
 chucks = defaultdict(list)
 
 @app.errorhandler(500)
 def handle_500(error_message):
+    """ error handle for HTTP 500 exceptions """
     return jsonify(f"nessage: {error_message}"), 500
 
 @app.route("/")
 def index():
+    """ handle for / """
     index_file = Path(__file__) / "index.html"
     if index_file.exists():
         return index_file.read_text()
@@ -43,10 +46,10 @@ def index():
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <link rel="stylesheet" href="{dropzone_cdn.rstrip('/')}/{dropzone_version}/min/dropzone.min.css"/>
-    <link rel="stylesheet" href="{dropzone_cdn.rstrip('/')}/{dropzone_version}/min/basic.min.css"/>
+    <link rel="stylesheet" href="{DROPZONE_CDN.rstrip('/')}/{DROPZONE_VERSION}/min/dropzone.min.css"/>
+    <link rel="stylesheet" href="{DROPZONE_CDN.rstrip('/')}/{DROPZONE_VERSION}/min/basic.min.css"/>
     <script type="application/javascript"
-        src="{dropzone_cdn.rstrip('/')}/{dropzone_version}/min/dropzone.min.js">
+        src="{DROPZONE_CDN.rstrip('/')}/{DROPZONE_VERSION}/min/dropzone.min.js">
     </script>
     <title>pyfiledrop</title>
 </head>
@@ -84,7 +87,7 @@ def index():
             function generateLink(combo){{
                 const uuid = combo.split('|^^|')[0];
                 const name = combo.split('|^^|')[1];
-                if ({'true' if allow_downloads else 'false'}) {{
+                if ({'true' if ALLOW_DOWNLOADS else 'false'}) {{
                     return `<a href="/download/${{uuid}}" download="${{name}}">${{name}}</a>`;
                 }}
                 return name;
@@ -96,13 +99,13 @@ def index():
                 Dropzone.options.dropper = {{
                     paramName: 'file',
                     chunking: true,
-                    forceChunking: {dropzone_force_chunking},
+                    forceChunking: {DROPZONE_FORCE_CHUNKING},
                     url: '/upload',
                     retryChunks: true,
-                    parallelChunkUploads: {dropzone_parallel_chunks},
-                    timeout: {dropzone_timeout}, // microseconds
-                    maxFilesize: {dropzone_max_file_size}, // megabytes
-                    chunkSize: {dropzone_chunk_size}, // bytes
+                    parallelChunkUploads: {DROPZONE_PARALLEL_CHUNKS},
+                    timeout: {DROPZONE_TIMEOUT}, // microseconds
+                    maxFilesize: {DROPZONE_MAX_FILE_SIZE}, // megabytes
+                    chunkSize: {DROPZONE_CHUNK_SIZE}, // bytes
                     init: function () {{
                         this.on("complete", function (file) {{
                             let combo = `${{file.upload.uuid}}|^^|${{file.upload.filename}}`;
@@ -132,6 +135,7 @@ def index():
 
 @app.route("/favicon.ico")
 def favicon():
+    """ icon """
     return zlib.decompress(
         b"x\x9c\xedVYN\xc40\x0c5J%[\xe2\xa3|q\x06\x8e1G\xe1(=ZoV\xb2\xa7\x89\x97R\x8d\x84\x04\xe4\xa5\xcb(\xc9\xb3\x1do"
         b"\x1d\x80\x17?\x1e\x0f\xf0O\x82\xcfw\x00\x7f\xc1\x87\xbf\xfd\x14l\x90\xe6#\xde@\xc1\x966n[z\x85\x11\xa6\xfcc"
@@ -149,6 +153,7 @@ def favicon():
 
 @app.route("/upload", methods=["POST"])
 def upload():
+    """ handle uploads """
     file = request.files.get("file")
     if not file:
         raise BadRequest(description="No file provided")
@@ -165,9 +170,9 @@ def upload():
         current_chunk = int(request.form["dzchunkindex"])
         total_chunks = int(request.form["dztotalchunkcount"])
     except KeyError as err:
-        raise BadRequest(description=f"Not all required fields supplied, missing {err}")
-    except ValueError:
-        raise BadRequest(description=f"Values provided were not in expected format")
+        raise BadRequest(description=f"Not all required fields supplied, missing {err}") from err
+    except ValueError as err:
+        raise BadRequest(description="Values provided were not in expected format") from err
 
     save_dir = chunk_path / dz_uuid
 
@@ -196,10 +201,11 @@ def upload():
 
 @app.route("/download/<uuid:dz_uuid>")
 def download(dz_uuid):
-    if not allow_downloads:
+    """ handler for file download requests """
+    if not ALLOW_DOWNLOADS:
         raise Forbidden()
     for file in storage_path.iterdir():
         if file.is_file() and file.name.startswith(dz_uuid):
-            return app.send_file(file.name, root=file.parent.absolute())
+            return send_file(os.path.join(file.parent.absolute(),
+                secure_filename(file.filename)))
     return NotFound()
-
